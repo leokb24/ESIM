@@ -1,18 +1,39 @@
 from torchtext import data
 from torchtext import datasets
 from torchtext.vocab import GloVe, Vectors
-
+import spacy
 # from nltk import word_tokenize
 
+def tokenizer(text):
+    spacy_en = spacy.load('en')
+    fileters = '!"#$%&()*+,-./:;<=>?@[\\]^_`{|}~\t\n'
+    trans_map = str.maketrans(fileters, " " * len(fileters))
+    text = text.translate(trans_map)
+    text = [tok.text for tok in spacy_en.tokenizer(text) if tok.text != ' ']
+
+    tokenized_text = []
+    auxiliary_verbs = ['am', 'is', 'are', 'was', 'were', "'s"]
+    for token in text:
+        if token == "n't":
+            tmp = 'not'
+        elif token == "'ll":
+            tmp = 'will'
+        elif token in auxiliary_verbs:
+            tmp = 'be'
+        else:
+            tmp = token
+        tokenized_text.append(tmp)
+    return tokenized_text
 
 class SNLI():
     def __init__(self, args):
-        self.TEXT = data.Field(batch_first=True, tokenize='spacy', lower=True)
+        self.TEXT = data.Field(batch_first=True, tokenize='spacy', lower=True, include_lengths=True)
         # self.LABEL = data.Field(sequential=False, unk_token=None)
         self.LABEL = data.LabelField()
         self.train, self.dev, self.test = datasets.SNLI.splits(self.TEXT, self.LABEL,
                                                                root='/media/fch/Data/leo/text-similarity/data')
-        vectors = Vectors(name='/media/fch/Data/leo/text-similarity/glove/glove.840B.300d.txt')
+        vectors = Vectors(name='/media/fch/Data/leo/text-similarity/glove/glove.840B.300d.txt',
+                          cache='/media/fch/Data/leo/text-similarity/.vector_cache')
         self.TEXT.build_vocab(self.train, self.dev, self.test, vectors=vectors)
         self.LABEL.build_vocab(self.train)
 
@@ -24,34 +45,7 @@ class SNLI():
                                        sort_key=sort_key)
 
         self.max_word_len = max([len(w) for w in self.TEXT.vocab.itos])
-        # for <pad>
-        self.char_vocab = {'': 0}
-        # for <unk> and <pad>
-        self.characterized_words = [[0] * self.max_word_len, [0] * self.max_word_len]
 
-        if args.use_char_emb:
-            self.build_char_vocab()
-
-    def build_char_vocab(self):
-        # for normal words
-        for word in self.TEXT.vocab.itos[2:]:
-            chars = []
-            for c in list(word):
-                if c not in self.char_vocab:
-                    self.char_vocab[c] = len(self.char_vocab)
-
-                chars.append(self.char_vocab[c])
-
-            chars.extend([0] * (self.max_word_len - len(word)))
-            self.characterized_words.append(chars)
-
-    def characterize(self, batch):
-        """
-        :param batch: Pytorch Variable with shape (batch, seq_len)
-        :return: Pytorch Variable with shape (batch, seq_len, max_word_len)
-        """
-        batch = batch.data.cpu().numpy().astype(int).tolist()
-        return [[self.characterized_words[w] for w in words] for words in batch]
 
 class Quora():
     def __init__(self, args):
@@ -83,31 +77,3 @@ class Quora():
                                                                                     sort_key=sort_key)
 
         self.max_word_len = max([len(w) for w in self.TEXT.vocab.itos])
-        # for <pad>
-        self.char_vocab = {'': 0}
-        # for <unk> and <pad>
-        self.characterized_words = [[0] * self.max_word_len, [0] * self.max_word_len]
-
-        if args.use_char_emb:
-            self.build_char_vocab()
-
-    def build_char_vocab(self):
-        # for normal words
-        for word in self.TEXT.vocab.itos[2:]:
-            chars = []
-            for c in list(word):
-                if c not in self.char_vocab:
-                    self.char_vocab[c] = len(self.char_vocab)
-
-                chars.append(self.char_vocab[c])
-
-            chars.extend([0] * (self.max_word_len - len(word)))
-            self.characterized_words.append(chars)
-
-    def characterize(self, batch):
-        """
-        :param batch: Pytorch Variable with shape (batch, seq_len)
-        :return: Pytorch Variable with shape (batch, seq_len, max_word_len)
-        """
-        batch = batch.data.cpu().numpy().astype(int).tolist()
-        return [[self.characterized_words[w] for w in words] for words in batch]
