@@ -25,19 +25,10 @@ def test(model, args, data, mode='test'):
         else:
             s1, s2 = 'q1', 'q2'
 
-        s1, s2 = getattr(batch, s1), getattr(batch, s2)
-        kwargs = {'p': s1, 'h': s2}
+        s1, s1_l = getattr(batch, s1)
+        s2, s2_l = getattr(batch, s2)
 
-        if args.use_char_emb:
-            char_p = Variable(torch.LongTensor(data.characterize(s1)))
-            char_h = Variable(torch.LongTensor(data.characterize(s2)))
-
-            if args.gpu > -1:
-                char_p = char_p.cuda(args.gpu)
-                char_h = char_h.cuda(args.gpu)
-
-            kwargs['char_p'] = char_p
-            kwargs['char_h'] = char_h
+        kwargs = {'p': s1, 'p_l': s1_l, 'h': s2, 'h_l': s2_l}
 
         pred = model(**kwargs)
 

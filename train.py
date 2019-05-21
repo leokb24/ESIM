@@ -24,54 +24,37 @@ def train(args, data):
 
     parameters = filter(lambda p: p.requires_grad, model.parameters())
     optimizer = optim.Adam(parameters, lr=args.learning_rate)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer,
+                                                           mode="max",
+                                                           factor=0.7,
+                                                           patience=0)
+
     criterion = nn.CrossEntropyLoss()
 
-    writer = SummaryWriter(log_dir='runs/' + args.model_time)
+    # writer = SummaryWriter(log_dir='runs/' + args.model_time)
 
     model.train()
     # loss, last_epoch = 0, -1
     max_dev_acc, max_test_acc = 0, 0
 
     iterator = data.train_iter
+    patience_counter = 0
+    last_dev_score = 0
     for epoch in range(args.epochs):
         iterator.init_epoch()
         n_correct, n_total = 0, 0
         all_losses = []
         print('epoch:', epoch+1)
         for i, batch in enumerate(iterator):
-            # present_epoch = int(iterator.epoch)
-            # if present_epoch == args.epoch:
-            #     break
-            # if present_epoch > last_epoch:
-            #     print('epoch:', present_epoch + 1)
-            # last_epoch = present_epoch
-
             if args.data_type == 'SNLI':
                 s1, s2 = 'premise', 'hypothesis'
             else:
                 s1, s2 = 'q1', 'q2'
 
-            s1, s2 = getattr(batch, s1), getattr(batch, s2)
+            s1, s1_l = getattr(batch, s1)
+            s2, s2_l = getattr(batch, s2)
 
-            # limit the lengths of input sentences up to max_sent_len
-            if args.max_sent_len >= 0:
-                if s1.size()[1] > args.max_sent_len:
-                    s1 = s1[:, :args.max_sent_len]
-                if s2.size()[1] > args.max_sent_len:
-                    s2 = s2[:, :args.max_sent_len]
-
-            kwargs = {'p': s1, 'h': s2}
-
-            if args.use_char_emb:
-                char_p = Variable(torch.LongTensor(data.characterize(s1)))
-                char_h = Variable(torch.LongTensor(data.characterize(s2)))
-
-                if args.gpu > -1:
-                    char_p = char_p.to(args.device)
-                    char_h = char_h.to(args.device)
-
-                kwargs['char_p'] = char_p
-                kwargs['char_h'] = char_h
+            kwargs = {'p': s1, 'p_l': s1_l, 'h': s2, 'h_l': s2_l}
 
             pred = model(**kwargs)
 
@@ -92,12 +75,12 @@ def train(args, data):
                 train_loss = np.mean(all_losses)
                 c = (i + 1) // args.print_freq
 
-                writer.add_scalar('loss/train', train_loss, c)
-                writer.add_scalar('loss/dev', dev_loss, c)
-                writer.add_scalar('loss/test', test_loss, c)
-                writer.add_scalar('acc/train', train_acc, c)
-                writer.add_scalar('acc/dev', dev_acc, c)
-                writer.add_scalar('acc/test', test_acc, c)
+                # writer.add_scalar('loss/train', train_loss, c)
+                # writer.add_scalar('loss/dev', dev_loss, c)
+                # writer.add_scalar('loss/test', test_loss, c)
+                # writer.add_scalar('acc/train', train_acc, c)
+                # writer.add_scalar('acc/dev', dev_acc, c)
+                # writer.add_scalar('acc/test', test_acc, c)
 
                 print(f'train loss: {train_loss:.3f} / dev loss: {dev_loss:.3f} / test loss: {test_loss:.3f}'
                       f' / train acc: {train_acc:.3f} / dev acc: {dev_acc:.3f} / test acc: {test_acc:.3f}')
@@ -109,29 +92,47 @@ def train(args, data):
                     # torch.save(best_model.state_dict(), f'saved_models/BIBPM_{args.data_type}_{dev_acc}.pt')
                 model.train()
 
-    writer.close()
+        # dev_loss, dev_acc = test(model, args, data, mode='dev')
+        # Early Stopping
+        if max_dev_acc < last_dev_score:
+            patience_counter += 1
+            if patience_counter >= args.patience:
+                print("Early stopping: patience limit reached, stopping...")
+                break
+        else:
+            patience_counter = 0
+            last_dev_score = max_dev_acc
+        print("patience_counter: ", patience_counter)
+
+        scheduler.step(max_dev_acc)
+        model.train()
+
+
+    # writer.close()
     print(f'max dev acc: {max_dev_acc:.3f} / max test acc: {max_test_acc:.3f}')
 
     return best_model, max_dev_acc
 
 
 def main():
+    print('add projection-layer, use dropout without bn')
     parser = argparse.ArgumentParser()
-    parser.add_argument('--batch-size', default=64, type=int)
+    parser.add_argument('--batch-size', default=32, type=int)
     parser.add_argument('--char-dim', default=20, type=int)
     parser.add_argument('--char-hidden-size', default=50, type=int)
-    parser.add_argument('--data-type', default='Quora', help='available: SNLI or Quora')
+    parser.add_argument('--data-type', default='SNLI', help='available: SNLI or Quora')
     parser.add_argument('--dropout', default=0.5, type=float)
-    parser.add_argument('--epochs', default=10, type=int)
+    parser.add_argument('--epochs', default=15, type=int)
     parser.add_argument('--gpu', default=0, type=int)
     parser.add_argument('--hidden-size', default=300, type=int)
     parser.add_argument('--learning-rate', default=0.0004, type=float)
     parser.add_argument('--max-sent-len', default=-1, type=int,
                         help='max length of input sentences model can accept, if -1, it accepts any length')
     # parser.add_argument('--num-perspective', default=20, type=int)
-    parser.add_argument('--print-freq', default=500, type=int)
+    parser.add_argument('--print-freq', default=1000, type=int)
     parser.add_argument('--use-char-emb', default=False, action='store_true')
     parser.add_argument('--word-dim', default=300, type=int)
+    parser.add_argument('--patience', default=3, type=int)
     parser.add_argument('--train_embed', action='store_false', dest='fix_emb')
     args = parser.parse_args()
     args.device = torch.device('cuda:{}'.format(args.gpu) if torch.cuda.is_available() else 'cpu')
@@ -145,7 +146,7 @@ def main():
     else:
         raise NotImplementedError('only SNLI or Quora data is possible')
 
-    setattr(args, 'char_vocab_size', len(data.char_vocab))
+    # setattr(args, 'char_vocab_size', len(data.char_vocab))
     setattr(args, 'word_vocab_size', len(data.TEXT.vocab))
     setattr(args, 'class_size', len(data.LABEL.vocab))
     setattr(args, 'max_word_len', data.max_word_len)
@@ -156,7 +157,7 @@ def main():
 
     if not os.path.exists('saved_models'):
         os.makedirs('saved_models')
-    torch.save(best_model.state_dict(), f'saved_models/BIBPM_{args.data_type}_{max_dev_acc}.pt')
+    torch.save(best_model.state_dict(), f'saved_models/ESIM_{args.data_type}_{max_dev_acc:.3f}.pt')
 
     print('training finished!')
 
